@@ -396,6 +396,7 @@ if(SIMDJSON_BUILD_STATIC_LIB)
   simdjson_apply_props(simdjson_static)
 endif()
 
+return()
 # ---- Install rules ----
 
 if(SIMDJSON_INSTALL)
