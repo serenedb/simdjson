@@ -358,27 +358,6 @@ if(SIMDJSON_ENABLE_NAN_INF)
   simdjson_add_props(target_compile_definitions PUBLIC SIMDJSON_ENABLE_NAN_INF=1)
 endif()
 
-# GCC and Clang have horrendous Debug builds when using SIMD.
-# A common fix is to use '-Og' instead.
-# bug https://gcc.gnu.org/bugzilla/show_bug.cgi?id=54412
-if(
-    (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
-        CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
-        CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-)
-  message(STATUS "Adding -Og to compile flag")
-  simdjson_add_props(
-      target_compile_options PRIVATE
-      $<$<CONFIG:DEBUG>:-Og>
-  )
-  # -Og defines __OPTIMIZE__, so the header would not auto-enable
-  # SIMDJSON_DEVELOPMENT_CHECKS in Debug. Keep the checks in Debug only.
-  simdjson_add_props(
-      target_compile_definitions PUBLIC
-      $<$<CONFIG:DEBUG>:SIMDJSON_DEVELOPMENT_CHECKS>
-  )
-endif()
-
 if(SIMDJSON_ENABLE_THREADS)
   find_package(Threads REQUIRED)
   simdjson_add_props(target_link_libraries PUBLIC Threads::Threads)
