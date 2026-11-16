@@ -129,6 +129,13 @@ simdjson_warn_unused simdjson_inline simdjson_result<bool> value_iterator::has_n
       SIMDJSON_TRY( end_container() );
       return false;
     case ',':
+      if (_json_iter->parser->allow_trailing_commas &&
+          *_json_iter->peek() == '}') {
+        _json_iter->return_current_and_advance();
+        logger::log_end_value(*_json_iter, "object");
+        SIMDJSON_TRY(end_container());
+        return false;
+      }
       return true;
     default:
       return report_error(TAPE_ERROR, "Missing comma between object fields");
@@ -535,6 +542,13 @@ simdjson_warn_unused simdjson_inline simdjson_result<bool> value_iterator::has_n
       SIMDJSON_TRY( end_container() );
       return false;
     case ',':
+      if (_json_iter->parser->allow_trailing_commas &&
+          *_json_iter->peek() == ']') {
+        _json_iter->return_current_and_advance();
+        logger::log_end_value(*_json_iter, "array");
+        SIMDJSON_TRY(end_container());
+        return false;
+      }
       _json_iter->descend_to(depth()+1);
       return true;
     default:
@@ -1190,7 +1204,8 @@ simdjson_inline bool value_iterator::is_valid() const noexcept {
 }
 
 simdjson_inline simdjson_result<json_type> value_iterator::type() const noexcept {
-  switch (*peek_start()) {
+  const uint8_t *json = peek_start();
+  switch (*json) {
     case '{':
       return json_type::object;
     case '[':
@@ -1198,6 +1213,9 @@ simdjson_inline simdjson_result<json_type> value_iterator::type() const noexcept
     case '"':
       return json_type::string;
     case 'n':
+      if (_json_iter->parser->allow_inf_and_nan && (json[1] | 0x20) == 'a') {
+        return json_type::number;
+      }
       return json_type::null;
     case 't': case 'f':
       return json_type::boolean;
@@ -1205,6 +1223,11 @@ simdjson_inline simdjson_result<json_type> value_iterator::type() const noexcept
     case '0': case '1': case '2': case '3': case '4':
     case '5': case '6': case '7': case '8': case '9':
       return json_type::number;
+    case 'N': case 'I': case 'i':
+      if (_json_iter->parser->allow_inf_and_nan) {
+        return json_type::number;
+      }
+      return json_type::unknown;
     default:
       return json_type::unknown;
   }
