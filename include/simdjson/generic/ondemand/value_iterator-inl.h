@@ -59,11 +59,9 @@ simdjson_warn_unused simdjson_inline simdjson_result<bool> value_iterator::start
 simdjson_warn_unused simdjson_inline simdjson_result<bool> value_iterator::started_object() noexcept {
   assert_at_container_start();
 #if SIMDJSON_DEVELOPMENT_CHECKS
-  // The development checks record the start of every open container in a
-  // buffer of max_depth() entries: a document nested deeper than that is
-  // rejected, as the DOM parser does.
-  if (size_t(_depth) >= _json_iter->parser->max_depth()) { return report_error(DEPTH_ERROR, "Exceeded max depth!"); }
-  _json_iter->set_start_position(_depth, start_position());
+  if (_json_iter->set_start_position(_depth, start_position())) {
+    return report_error(MEMALLOC, "Could not record the start of the object");
+  }
 #endif
   if (*_json_iter->peek() == '}') {
     logger::log_value(*_json_iter, "empty object");
@@ -479,10 +477,6 @@ inline std::string value_iterator::to_string() const noexcept {
 
 simdjson_warn_unused simdjson_inline simdjson_result<bool> value_iterator::started_array() noexcept {
   assert_at_container_start();
-#if SIMDJSON_DEVELOPMENT_CHECKS
-  // See started_object().
-  if (size_t(_depth) >= _json_iter->parser->max_depth()) { return report_error(DEPTH_ERROR, "Exceeded max depth!"); }
-#endif
   if (*_json_iter->peek() == ']') {
     logger::log_value(*_json_iter, "empty array");
     _json_iter->return_current_and_advance();
@@ -491,7 +485,9 @@ simdjson_warn_unused simdjson_inline simdjson_result<bool> value_iterator::start
   }
   _json_iter->descend_to(depth()+1);
 #if SIMDJSON_DEVELOPMENT_CHECKS
-  _json_iter->set_start_position(_depth, start_position());
+  if (_json_iter->set_start_position(_depth, start_position())) {
+    return report_error(MEMALLOC, "Could not record the start of the array");
+  }
 #endif
   return true;
 }

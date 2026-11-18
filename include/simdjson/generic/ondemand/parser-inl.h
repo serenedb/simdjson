@@ -31,21 +31,44 @@ simdjson_warn_unused simdjson_inline error_code parser::allocate(size_t new_capa
     return CAPACITY; // overflow, only happen on legacy 32-bit systems with very large capacity
   }
   size_t string_capacity = SIMDJSON_ROUNDUP_N(5 * (new_capacity / 3) + SIMDJSON_PADDING, 64);
-  string_buf.reset(new (std::nothrow) uint8_t[string_capacity]);
+  if (!string_buf.allocate(string_capacity, allocator)) {
+    return MEMALLOC;
+  }
 #if SIMDJSON_DEVELOPMENT_CHECKS
   start_positions.reset(new (std::nothrow) token_position[new_max_depth]);
+  start_positions_size = start_positions ? new_max_depth : 0;
 #endif
   if (implementation) {
-    SIMDJSON_TRY( implementation->set_capacity(new_capacity) );
     SIMDJSON_TRY( implementation->set_max_depth(new_max_depth) );
   } else {
-    SIMDJSON_TRY( simdjson::get_active_implementation()->create_dom_parser_implementation(new_capacity, new_max_depth, implementation) );
+    SIMDJSON_TRY(
+        simdjson::get_active_implementation()->create_dom_parser_implementation(
+            0, new_max_depth, implementation));
   }
+  implementation->allocator = allocator;
+  SIMDJSON_TRY(implementation->set_capacity(new_capacity));
   _capacity = new_capacity;
   _max_depth = new_max_depth;
   return SUCCESS;
 }
 #if SIMDJSON_DEVELOPMENT_CHECKS
+simdjson_warn_unused simdjson_inline error_code
+parser::grow_start_positions(size_t size) noexcept {
+  const size_t new_size =
+      size > 2 * start_positions_size ? size : 2 * start_positions_size;
+  std::unique_ptr<token_position[]> grown{new (std::nothrow)
+                                              token_position[new_size]};
+  if (!grown) {
+    return MEMALLOC;
+  }
+  for (size_t i = 0; i < start_positions_size; i++) {
+    grown[i] = start_positions[i];
+  }
+  start_positions = std::move(grown);
+  start_positions_size = new_size;
+  return SUCCESS;
+}
+
 simdjson_inline simdjson_warn_unused bool parser::string_buffer_overflow(const uint8_t *string_buf_loc) const noexcept {
   return (string_buf_loc < string_buf.get()) || (size_t(string_buf_loc - string_buf.get()) >= capacity());
 }
