@@ -7,6 +7,17 @@
 
 namespace simdjson {
 
+/**
+ * Allocates the buffers a parser keeps between documents, which grow with the
+ * largest document it parses. allocate returns memory aligned as malloc's,
+ * or nullptr when it fails; deallocate gets back the size it was given.
+ */
+struct buffer_allocator {
+  void *(*allocate)(void *context, size_t size) noexcept;
+  void (*deallocate)(void *context, void *pointer, size_t size) noexcept;
+  void *context;
+};
+
 namespace dom {
 class document;
 } // namespace dom
@@ -38,6 +49,67 @@ inline bool is_streaming(stage1_mode mode) {
 
 namespace internal {
 
+/**
+ * An array of trivial elements from a buffer_allocator, or from new[] without
+ * one; it frees itself through what allocated it.
+ */
+template <typename T> class allocated_array {
+public:
+  allocated_array() noexcept = default;
+  allocated_array(const allocated_array &) = delete;
+  allocated_array &operator=(const allocated_array &) = delete;
+  allocated_array(allocated_array &&other) noexcept
+      : data_{other.data_}, size_{other.size_}, allocator_{other.allocator_} {
+    other.data_ = nullptr;
+    other.size_ = 0;
+  }
+  allocated_array &operator=(allocated_array &&other) noexcept {
+    if (this != &other) {
+      reset();
+      data_ = other.data_;
+      size_ = other.size_;
+      allocator_ = other.allocator_;
+      other.data_ = nullptr;
+      other.size_ = 0;
+    }
+    return *this;
+  }
+  ~allocated_array() noexcept { reset(); }
+
+  bool allocate(size_t size, const buffer_allocator *allocator) noexcept {
+    reset();
+    data_ = allocator ? static_cast<T *>(allocator->allocate(allocator->context,
+                                                             size * sizeof(T)))
+                      : new (std::nothrow) T[size];
+    if (!data_) {
+      return false;
+    }
+    size_ = size;
+    allocator_ = allocator;
+    return true;
+  }
+  void reset() noexcept {
+    if (!data_) {
+      return;
+    }
+    if (allocator_) {
+      allocator_->deallocate(allocator_->context, data_, size_ * sizeof(T));
+    } else {
+      delete[] data_;
+    }
+    data_ = nullptr;
+    size_ = 0;
+    allocator_ = nullptr;
+  }
+  T *get() const noexcept { return data_; }
+  T &operator[](size_t index) const noexcept { return data_[index]; }
+  explicit operator bool() const noexcept { return data_ != nullptr; }
+
+private:
+  T *data_{nullptr};
+  size_t size_{0};
+  const buffer_allocator *allocator_{nullptr};
+};
 
 /**
  * An implementation of simdjson's DOM parser for a particular CPU architecture.
@@ -189,7 +261,10 @@ public:
   /** Number of structural indices passed from stage 1 to stage 2 */
   uint32_t n_structural_indexes{0};
   /** Structural indices passed from stage 1 to stage 2 */
-  std::unique_ptr<uint32_t[]> structural_indexes{};
+  allocated_array<uint32_t> structural_indexes{};
+  /** Allocates structural_indexes when set_capacity grows it; nullptr uses
+   * new[] */
+  const buffer_allocator *allocator{nullptr};
   /** Next structural index to parse */
   uint32_t next_structural_index{0};
 

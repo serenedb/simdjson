@@ -70,8 +70,10 @@ inline simdjson_warn_unused error_code dom_parser_implementation::set_capacity(s
   }
   size_t max_structures = rounded_capacity + 9;
   if(max_structures > SIZE_MAX / sizeof(uint32_t)) { return CAPACITY; }
-  structural_indexes.reset( new (std::nothrow) uint32_t[max_structures] );
-  if (!structural_indexes) { _capacity = 0; return MEMALLOC; }
+  if (!structural_indexes.allocate(max_structures, allocator)) {
+    _capacity = 0;
+    return MEMALLOC;
+  }
   structural_indexes[0] = 0;
   n_structural_indexes = 0;
 

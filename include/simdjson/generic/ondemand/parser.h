@@ -376,6 +376,13 @@ public:
    */
   bool allow_inf_and_nan{false};
   /**
+   * Allocates the string buffer and the structural index, which grow with the
+   * largest document parsed; nullptr uses new[]. It must outlive the parser,
+   * and buffers allocated before it was set keep their allocator until the
+   * parser grows them.
+   */
+  const buffer_allocator *allocator{nullptr};
+  /**
    * Unescape this JSON string, replacing \\ with \, \n with newline, etc. to a user-provided buffer.
    * The result must be valid UTF-8.
    * The provided pointer is advanced to the end of the string by reference, and a string_view instance
@@ -463,7 +470,7 @@ private:
   size_t _max_capacity;
   size_t _max_depth{DEFAULT_MAX_DEPTH};
   size_t _document_len{0};
-  std::unique_ptr<uint8_t[]> string_buf{};
+  simdjson::internal::allocated_array<uint8_t> string_buf{};
 
 #if SIMDJSON_DEVELOPMENT_CHECKS
   std::unique_ptr<token_position[]> start_positions{};
