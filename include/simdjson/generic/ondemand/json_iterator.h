@@ -276,7 +276,8 @@ public:
   simdjson_warn_unused  simdjson_inline error_code consume_character(char c) noexcept;
 #if SIMDJSON_DEVELOPMENT_CHECKS
   simdjson_inline token_position start_position(depth_t depth) const noexcept;
-  simdjson_inline void set_start_position(depth_t depth, token_position position) noexcept;
+  simdjson_warn_unused simdjson_inline error_code
+  set_start_position(depth_t depth, token_position position) noexcept;
 #endif
 
   /* Useful for debugging and logging purposes. */

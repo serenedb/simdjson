@@ -449,11 +449,11 @@ namespace json_pointer_tests {
     // OSS-Fuzz 573717767: with SIMDJSON_DEVELOPMENT_CHECKS, walking a
     // document nested deeper than max_depth() overflowed the buffer that
     // records where each open container starts (an assertion failure).
-    // It must report DEPTH_ERROR instead, as the DOM parser does.
+    // The buffer grows instead, so every build reads the same documents.
     bool deeply_nested_pointer() {
         TEST_START();
         const size_t depth_limit = 16;
-        for (size_t n : {depth_limit - 1, depth_limit, depth_limit + 1}) {
+        for (size_t n : {depth_limit - 1, depth_limit, depth_limit + 1, 5 * depth_limit}) {
             std::string json = std::string(n, '[') + "1" + std::string(n, ']');
             std::string pointer;
             std::string path;
@@ -467,14 +467,8 @@ namespace json_pointer_tests {
             auto by_pointer = doc.at_pointer(pointer).get_int64().get(x);
             ASSERT_SUCCESS(parser.iterate(padded).get(doc));
             auto by_path = doc.at_path(path).get_int64().get(x);
-#if SIMDJSON_DEVELOPMENT_CHECKS
-            // The root container is at depth 1: max_depth() - 1 levels fit.
-            error_code expected = n < depth_limit ? SUCCESS : DEPTH_ERROR;
-#else
-            error_code expected = SUCCESS;
-#endif
-            ASSERT_ERROR(by_pointer, expected);
-            ASSERT_ERROR(by_path, expected);
+            ASSERT_SUCCESS(by_pointer);
+            ASSERT_SUCCESS(by_path);
         }
         TEST_SUCCEED();
     }
