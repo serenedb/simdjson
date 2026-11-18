@@ -515,6 +515,9 @@ private:
 
 #if SIMDJSON_DEVELOPMENT_CHECKS
   std::unique_ptr<token_position[]> start_positions{};
+  size_t start_positions_size{0};
+  simdjson_warn_unused simdjson_inline error_code
+  grow_start_positions(size_t size) noexcept;
 #endif
 
   friend class json_iterator;

@@ -1042,7 +1042,7 @@ simdjson_inline void json_iterator::reenter_child(token_position position, depth
   SIMDJSON_ASSUME(_depth == child_depth - 1);
 #if SIMDJSON_DEVELOPMENT_CHECKS
 #ifndef SIMDJSON_CLANG_VISUAL_STUDIO
-  SIMDJSON_ASSUME(size_t(child_depth) < parser->max_depth());
+  SIMDJSON_ASSUME(size_t(child_depth) < parser->start_positions_size);
   SIMDJSON_ASSUME(position >= parser->start_positions[child_depth]);
 #endif
 #endif
@@ -1061,13 +1061,20 @@ simdjson_warn_unused simdjson_inline error_code json_iterator::consume_character
 #if SIMDJSON_DEVELOPMENT_CHECKS
 
 simdjson_inline token_position json_iterator::start_position(depth_t depth) const noexcept {
-  SIMDJSON_ASSUME(size_t(depth) < parser->max_depth());
-  return size_t(depth) < parser->max_depth() ? parser->start_positions[depth] : 0;
+  SIMDJSON_ASSUME(size_t(depth) < parser->start_positions_size);
+  return size_t(depth) < parser->start_positions_size
+             ? parser->start_positions[depth]
+             : 0;
 }
 
-simdjson_inline void json_iterator::set_start_position(depth_t depth, token_position position) noexcept {
-  SIMDJSON_ASSUME(size_t(depth) < parser->max_depth());
-  if(size_t(depth) < parser->max_depth()) { parser->start_positions[depth] = position; }
+simdjson_warn_unused simdjson_inline error_code
+json_iterator::set_start_position(depth_t depth,
+                                  token_position position) noexcept {
+  if (size_t(depth) >= parser->start_positions_size) {
+    SIMDJSON_TRY(parser->grow_start_positions(size_t(depth) + 1));
+  }
+  parser->start_positions[depth] = position;
+  return SUCCESS;
 }
 
 #endif
