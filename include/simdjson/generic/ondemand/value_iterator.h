@@ -181,14 +181,12 @@ public:
    *           ^
    * ```
    *
-   * Key is *raw JSON,* meaning it will be matched against the verbatim JSON without attempting to
-   * unescape it. This works well for typical ASCII and UTF-8 keys (almost all of them), but may
-   * fail to match some keys with escapes (\u, \n, etc.).
+   * The key matches a JSON key that unescapes to it.
    */
   simdjson_warn_unused simdjson_inline error_code find_field(const std::string_view key) noexcept;
 
   /**
-   * Find the next field with the given key, *without* unescaping. This assumes object order: it
+   * Find the next field with the given key. This assumes object order: it
    * will not find the field if it was already passed when looking for some *other* field.
    *
    * Assumes you have called next_field() or otherwise matched the previous value.
@@ -200,14 +198,12 @@ public:
    *           ^
    * ```
    *
-   * Key is *raw JSON,* meaning it will be matched against the verbatim JSON without attempting to
-   * unescape it. This works well for typical ASCII and UTF-8 keys (almost all of them), but may
-   * fail to match some keys with escapes (\u, \n, etc.).
+   * The key matches a JSON key that unescapes to it.
    */
   simdjson_warn_unused simdjson_inline simdjson_result<bool> find_field_raw(const std::string_view key) noexcept;
 
   /**
-   * Find the field with the given key without regard to order, and *without* unescaping.
+   * Find the field with the given key without regard to order.
    *
    * This is an unordered object lookup: if the field is not found initially, it will cycle around and scan from the beginning.
    *
@@ -220,9 +216,7 @@ public:
    *           ^
    * ```
    *
-   * Key is *raw JSON,* meaning it will be matched against the verbatim JSON without attempting to
-   * unescape it. This works well for typical ASCII and UTF-8 keys (almost all of them), but may
-   * fail to match some keys with escapes (\u, \n, etc.).
+   * The key matches a JSON key that unescapes to it.
    */
   simdjson_warn_unused simdjson_inline simdjson_result<bool> find_field_unordered_raw(const std::string_view key) noexcept;
 
@@ -355,6 +349,10 @@ public:
 
   /** @} */
 protected:
+  simdjson_inline bool key_is(raw_json_string key, std::size_t length,
+                              std::string_view target) const noexcept;
+  bool unescaped_key_is(raw_json_string key, std::size_t length,
+                        std::string_view target) const noexcept;
   /**
    * Restarts an array iteration.
    * @returns Whether the array has any elements (returns false for empty).

@@ -105,7 +105,7 @@ public:
    * the location indicated by the JSON pointer (in case of success). It is no longer possible
    * to call at_pointer on the same array.
    *
-   * Also note that at_pointer() relies on find_field() which implies that we do not unescape keys when matching.
+   * Also note that at_pointer() relies on find_field(), which matches keys by their unescaped value.
    *
    * @return The value associated with the given JSON pointer, or:
    *         - NO_SUCH_FIELD if a field does not exist in an object
