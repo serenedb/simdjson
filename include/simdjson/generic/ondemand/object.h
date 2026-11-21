@@ -176,8 +176,8 @@ public:
    * If you have multiple fields with a matching key ({"x": 1,  "x": 1}) be mindful
    * that only one field is returned.
    *
-   * **Raw Keys:** The lookup will be done against the *raw* key, and will not unescape keys.
-   * e.g. `object["a"]` will match `{ "a": 1 }`, but will *not* match `{ "\u0061": 1 }`.
+   * **Keys:** The lookup matches a key by its unescaped value.
+   * e.g. `object["a"]` will match `{ "a": 1 }` and `{ "\u0061": 1 }`.
    *
    * You must consume the fields on an object one at a time. A request for a new key
    * invalidates previous field values: it makes them unsafe. The value instance you get
@@ -364,7 +364,7 @@ public:
    * to be within the value matched by the key indicated by the JSON pointer query. Thus any preceding
    * key (as well as the current key) can no longer be used with following JSON pointer calls.
    *
-   * Also note that at_pointer() relies on find_field() which implies that we do not unescape keys when matching.
+   * Also note that at_pointer() relies on find_field(), which matches keys by their unescaped value.
    *
    * @return The value associated with the given JSON pointer, or:
    *         - NO_SUCH_FIELD if a field does not exist in an object

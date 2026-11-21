@@ -553,8 +553,8 @@ public:
    * double x = obj.find_field("x");
    * ```
    *
-   * **Raw Keys:** The lookup will be done against the *raw* key, and will not unescape keys.
-   * e.g. `object["a"]` will match `{ "a": 1 }`, but will *not* match `{ "\u0061": 1 }`.
+   * **Keys:** The lookup matches a key by its unescaped value.
+   * e.g. `object["a"]` will match `{ "a": 1 }` and `{ "\u0061": 1 }`.
    *
    *
    * You must consume the fields on an object one at a time. A request for a new key
@@ -813,13 +813,12 @@ public:
    *   auto doc = parser.iterate(json);
    *   doc.at_pointer("//a/1") == 20
    *
-   * Key values are matched exactly, without unescaping or Unicode normalization.
-   * We do a byte-by-byte comparison. E.g.
+   * Key values are matched by their unescaped value, without Unicode normalization. E.g.
    *
    *   const padded_string json = "{\"\\u00E9\":123}"_padded;
    *   auto doc = parser.iterate(json);
-   *   doc.at_pointer("/\\u00E9") == 123
-   *   doc.at_pointer((const char*)u8"/\u00E9") returns an error (NO_SUCH_FIELD)
+   *   doc.at_pointer("/\\u00E9") returns an error (NO_SUCH_FIELD)
+   *   doc.at_pointer((const char*)u8"/\u00E9") == 123
    *
    * Note that at_pointer() automatically calls rewind between each call. Thus
    * all values, objects and arrays that you have created so far (including unescaped strings)
@@ -827,7 +826,7 @@ public:
    * should be stored in your own variables, arrays should be decoded and stored in your own array-like
    * structures and so forth.
    *
-   * Also note that at_pointer() relies on find_field() which implies that we do not unescape keys when matching
+   * Also note that at_pointer() relies on find_field(), which matches keys by their unescaped value.
    *
    * @return The value associated with the given JSON pointer, or:
    *         - NO_SUCH_FIELD if a field does not exist in an object
@@ -847,13 +846,12 @@ public:
    *
    * https://www.rfc-editor.org/rfc/rfc9535 (RFC 9535)
    *
-   * Key values are matched exactly, without unescaping or Unicode normalization.
-   * We do a byte-by-byte comparison. E.g.
+   * Key values are matched by their unescaped value, without Unicode normalization. E.g.
    *
    *   const padded_string json = "{\"\\u00E9\":123}"_padded;
    *   auto doc = parser.iterate(json);
-   *   doc.at_path(".\\u00E9") == 123
-   *   doc.at_path((const char*)u8".\u00E9") returns an error (NO_SUCH_FIELD)
+   *   doc.at_path(".\\u00E9") returns an error (NO_SUCH_FIELD)
+   *   doc.at_path((const char*)u8".\u00E9") == 123
    *
    * @return The value associated with the given JSONPath expression, or:
    *         - INVALID_JSON_POINTER if the JSONPath to JSON Pointer conversion fails
