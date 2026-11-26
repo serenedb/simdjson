@@ -42,6 +42,7 @@ namespace SIMDJSON_IMPLEMENTATION {
 namespace builder {
 
 using simdjson::internal::escape_best::write_string_escaped;
+using simdjson::internal::escape_best::write_string_escaped_unicode;
 
 #if SIMDJSON_SUPPORTS_RANGES && SIMDJSON_SUPPORTS_CONCEPTS
 /**
@@ -155,6 +156,22 @@ public:
    * There is no UTF-8 validation.
    */
    simdjson_inline void escape_and_append_with_quotes(const char* input)  noexcept;
+
+  /**
+   * Append the std::string_view, after escaping it as escape_and_append does
+   * and escaping DEL and every character outside ASCII as well, as \uXXXX
+   * with lowercase hex digits (a surrogate pair above U+FFFF). The result is
+   * printable ASCII only, as an HTTP header value must be. A byte that does
+   * not begin a well-formed UTF-8 sequence becomes the escaped replacement
+   * character U+FFFD.
+   */
+  simdjson_inline void escape_unicode_and_append(std::string_view input)  noexcept;
+
+  /**
+   * Append the std::string_view surrounded by double quotes, after escaping
+   * it as escape_unicode_and_append does.
+   */
+  simdjson_inline void escape_unicode_and_append_with_quotes(std::string_view input)  noexcept;
 
   /**
    * Append the C string directly, without escaping.

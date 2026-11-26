@@ -318,6 +318,31 @@ string_builder::escape_and_append_with_quotes(const char *input) noexcept {
   std::string_view cinput(input);
   escape_and_append_with_quotes(cinput);
 }
+
+simdjson_inline void
+string_builder::escape_unicode_and_append(std::string_view input) noexcept {
+  if (input.size() > (std::numeric_limits<size_t>::max)() / 6) {
+    set_valid(false);
+    return;
+  }
+  if (capacity_check(6 * input.size())) {
+    position += write_string_escaped_unicode(input, buffer_data() + position);
+  }
+}
+
+simdjson_inline void
+string_builder::escape_unicode_and_append_with_quotes(
+    std::string_view input) noexcept {
+  if (input.size() > ((std::numeric_limits<size_t>::max)() - 2) / 6) {
+    set_valid(false);
+    return;
+  }
+  if (capacity_check(2 + 6 * input.size())) {
+    buffer_data()[position++] = '"';
+    position += write_string_escaped_unicode(input, buffer_data() + position);
+    buffer_data()[position++] = '"';
+  }
+}
 #if SIMDJSON_SUPPORTS_CONCEPTS
 template <constevalutil::fixed_string key>
 simdjson_inline void string_builder::escape_and_append_with_quotes() noexcept {
