@@ -185,15 +185,98 @@ inline bool has_json_escapable_byte(uint64_t x) {
  */
 
 // Scalar fallback for finding next quotable character
+template <bool unicode = false>
 SIMDJSON_CONSTEXPR_LAMBDA simdjson_inline size_t
 find_next_json_quotable_character_scalar(const std::string_view view,
                                          size_t location) noexcept {
   for (auto pos = view.begin() + location; pos != view.end(); ++pos) {
-    if (escape_tables<>::quotable[static_cast<uint8_t>(*pos)]) {
+    const uint8_t c = static_cast<uint8_t>(*pos);
+    if (escape_tables<>::quotable[c] || (unicode && c >= 0x7F)) {
       return pos - view.begin();
     }
   }
   return size_t(view.size());
+}
+
+simdjson_inline void write_unicode_escape(uint32_t unit, char *&out) noexcept {
+  static constexpr char hex[] = "0123456789abcdef";
+  out[0] = '\\';
+  out[1] = 'u';
+  out[2] = hex[(unit >> 12) & 0xF];
+  out[3] = hex[(unit >> 8) & 0xF];
+  out[4] = hex[(unit >> 4) & 0xF];
+  out[5] = hex[unit & 0xF];
+  out += 6;
+}
+
+simdjson_inline size_t escape_unicode_char(const uint8_t *src, size_t len,
+                                           char *&out) noexcept {
+  const uint8_t lead = src[0];
+  size_t size = 0;
+  uint32_t code_point = 0;
+  uint8_t low = 0x80;
+  uint8_t high = 0xBF;
+  if (lead < 0x80) {
+    write_unicode_escape(lead, out);
+    return 1;
+  } else if (lead >= 0xC2 && lead <= 0xDF) {
+    size = 2;
+    code_point = lead & 0x1F;
+  } else if (lead >= 0xE0 && lead <= 0xEF) {
+    size = 3;
+    code_point = lead & 0x0F;
+    low = lead == 0xE0 ? 0xA0 : 0x80;
+    high = lead == 0xED ? 0x9F : 0xBF;
+  } else if (lead >= 0xF0 && lead <= 0xF4) {
+    size = 4;
+    code_point = lead & 0x07;
+    low = lead == 0xF0 ? 0x90 : 0x80;
+    high = lead == 0xF4 ? 0x8F : 0xBF;
+  }
+  if (size == 0 || len < size || src[1] < low || src[1] > high) {
+    write_unicode_escape(0xFFFD, out);
+    return 1;
+  }
+  code_point = (code_point << 6) | (src[1] & 0x3F);
+  for (size_t i = 2; i < size; i++) {
+    if ((src[i] & 0xC0) != 0x80) {
+      write_unicode_escape(0xFFFD, out);
+      return 1;
+    }
+    code_point = (code_point << 6) | (src[i] & 0x3F);
+  }
+  if (code_point > 0xFFFF) {
+    code_point -= 0x10000;
+    write_unicode_escape(0xD800 + (code_point >> 10), out);
+    write_unicode_escape(0xDC00 + (code_point & 0x3FF), out);
+  } else {
+    write_unicode_escape(code_point, out);
+  }
+  return size;
+}
+
+template <typename Finder>
+inline size_t write_string_escaped_unicode_with(const std::string_view input,
+                                                char *out) {
+  const uint8_t *src = reinterpret_cast<const uint8_t *>(input.data());
+  const size_t len = input.size();
+  const char *const initout = out;
+  size_t location = 0;
+  while (true) {
+    const size_t next = Finder::find(input, location);
+    memcpy(out, src + location, next - location);
+    out += next - location;
+    if (next == len) {
+      break;
+    }
+    if (escape_tables<>::quotable[src[next]]) {
+      escape_json_char(char(src[next]), out);
+      location = next + 1;
+    } else {
+      location = next + escape_unicode_char(src + next, len - next, out);
+    }
+  }
+  return size_t(out - initout);
 }
 
 // Writes the escaped version of input to out, returning the number of bytes
@@ -237,9 +320,20 @@ struct finder {
     return find_next_json_quotable_character_scalar(view, location);
   }
 };
+struct unicode_finder {
+  static simdjson_inline size_t find(const std::string_view view,
+                                     size_t location) noexcept {
+    return find_next_json_quotable_character_scalar<true>(view, location);
+  }
+};
 
 inline size_t write_string_escaped(const std::string_view input, char *out) {
   return write_string_escaped_with<finder>(input, out);
+}
+
+inline size_t write_string_escaped_unicode(const std::string_view input,
+                                           char *out) {
+  return write_string_escaped_unicode_with<unicode_finder>(input, out);
 }
 } // namespace escape_scalar
 
@@ -248,6 +342,7 @@ inline size_t write_string_escaped(const std::string_view input, char *out) {
 // minimize redundant work.
 #if SIMDJSON_EXPERIMENTAL_HAS_LASX
 namespace escape_lasx {
+template <bool unicode = false>
 simdjson_inline size_t
 find_next_json_quotable_character(const std::string_view view,
                                   size_t location) noexcept {
@@ -268,6 +363,10 @@ find_next_json_quotable_character(const std::string_view view,
     __m256i needs_escape = __lasx_xvseq_b(word, v34);
     needs_escape = __lasx_xvor_v(needs_escape, __lasx_xvseq_b(word, v92));
     needs_escape = __lasx_xvor_v(needs_escape, __lasx_xvslt_bu(word, v32));
+    if (unicode) {
+      needs_escape = __lasx_xvor_v(
+          needs_escape, __lasx_xvslt_bu(__lasx_xvreplgr2vr_b(126), word));
+    }
 
     if (!__lasx_xbz_v(needs_escape)) {
       // Found a quotable character - locate it via the four 64-bit lanes
@@ -290,7 +389,7 @@ find_next_json_quotable_character(const std::string_view view,
     remaining -= 32;
   }
   size_t current = len - remaining;
-  return find_next_json_quotable_character_scalar(view, current);
+  return find_next_json_quotable_character_scalar<unicode>(view, current);
 }
 struct finder {
   static simdjson_inline size_t find(const std::string_view view,
@@ -298,15 +397,27 @@ struct finder {
     return find_next_json_quotable_character(view, location);
   }
 };
+struct unicode_finder {
+  static simdjson_inline size_t find(const std::string_view view,
+                                     size_t location) noexcept {
+    return find_next_json_quotable_character<true>(view, location);
+  }
+};
 
 inline size_t write_string_escaped(const std::string_view input, char *out) {
   return write_string_escaped_with<finder>(input, out);
+}
+
+inline size_t write_string_escaped_unicode(const std::string_view input,
+                                           char *out) {
+  return write_string_escaped_unicode_with<unicode_finder>(input, out);
 }
 } // namespace escape_lasx
 #endif
 
 #if SIMDJSON_EXPERIMENTAL_HAS_LSX
 namespace escape_lsx {
+template <bool unicode = false>
 simdjson_inline size_t
 find_next_json_quotable_character(const std::string_view view,
                                   size_t location) noexcept {
@@ -327,6 +438,10 @@ find_next_json_quotable_character(const std::string_view view,
     __m128i needs_escape = __lsx_vseq_b(word, v34);
     needs_escape = __lsx_vor_v(needs_escape, __lsx_vseq_b(word, v92));
     needs_escape = __lsx_vor_v(needs_escape, __lsx_vslt_bu(word, v32));
+    if (unicode) {
+      needs_escape = __lsx_vor_v(
+          needs_escape, __lsx_vslt_bu(__lsx_vreplgr2vr_b(126), word));
+    }
 
     if (!__lsx_bz_v(needs_escape)){
 
@@ -344,7 +459,7 @@ find_next_json_quotable_character(const std::string_view view,
     remaining -= 16;
   }
   size_t current = len - remaining;
-  return find_next_json_quotable_character_scalar(view, current);
+  return find_next_json_quotable_character_scalar<unicode>(view, current);
 }
 struct finder {
   static simdjson_inline size_t find(const std::string_view view,
@@ -352,15 +467,27 @@ struct finder {
     return find_next_json_quotable_character(view, location);
   }
 };
+struct unicode_finder {
+  static simdjson_inline size_t find(const std::string_view view,
+                                     size_t location) noexcept {
+    return find_next_json_quotable_character<true>(view, location);
+  }
+};
 
 inline size_t write_string_escaped(const std::string_view input, char *out) {
   return write_string_escaped_with<finder>(input, out);
+}
+
+inline size_t write_string_escaped_unicode(const std::string_view input,
+                                           char *out) {
+  return write_string_escaped_unicode_with<unicode_finder>(input, out);
 }
 } // namespace escape_lsx
 #endif
 
 #if SIMDJSON_EXPERIMENTAL_HAS_RVV
 namespace escape_rvv {
+template <bool unicode = false>
 simdjson_inline size_t
 find_next_json_quotable_character(const std::string_view view,
                                   size_t location) noexcept {
@@ -379,6 +506,10 @@ find_next_json_quotable_character(const std::string_view view,
         __riscv_vmseq(word, (uint8_t)92, vl), vl);
     needs_escape = __riscv_vmor(needs_escape,
         __riscv_vmsltu(word, (uint8_t)32, vl), vl);
+    if (unicode) {
+      needs_escape = __riscv_vmor(needs_escape,
+          __riscv_vmsgtu(word, (uint8_t)126, vl), vl);
+    }
 
     long first = __riscv_vfirst(needs_escape, vl);
     if (first >= 0) {
@@ -397,15 +528,27 @@ struct finder {
     return find_next_json_quotable_character(view, location);
   }
 };
+struct unicode_finder {
+  static simdjson_inline size_t find(const std::string_view view,
+                                     size_t location) noexcept {
+    return find_next_json_quotable_character<true>(view, location);
+  }
+};
 
 inline size_t write_string_escaped(const std::string_view input, char *out) {
   return write_string_escaped_with<finder>(input, out);
+}
+
+inline size_t write_string_escaped_unicode(const std::string_view input,
+                                           char *out) {
+  return write_string_escaped_unicode_with<unicode_finder>(input, out);
 }
 } // namespace escape_rvv
 #endif
 
 #if SIMDJSON_EXPERIMENTAL_HAS_PPC64
 namespace escape_ppc64 {
+template <bool unicode = false>
 simdjson_inline size_t
 find_next_json_quotable_character(const std::string_view view,
                                   size_t location) noexcept {
@@ -435,6 +578,10 @@ find_next_json_quotable_character(const std::string_view view,
         (__vector unsigned char)vec_cmpeq(word, v92));
     needs_escape = vec_or(needs_escape,
         (__vector unsigned char)vec_cmplt(word, v32));
+    if (unicode) {
+      needs_escape = vec_or(needs_escape,
+          (__vector unsigned char)vec_cmpgt(word, vec_splats((unsigned char)126)));
+    }
 
     __vector unsigned long long result =
         (__vector unsigned long long)vec_vbpermq(needs_escape, perm_mask);
@@ -453,7 +600,7 @@ find_next_json_quotable_character(const std::string_view view,
 
   // Scalar fallback for remaining bytes
   size_t current = len - remaining;
-  return find_next_json_quotable_character_scalar(view, current);
+  return find_next_json_quotable_character_scalar<unicode>(view, current);
 }
 struct finder {
   static simdjson_inline size_t find(const std::string_view view,
@@ -461,9 +608,20 @@ struct finder {
     return find_next_json_quotable_character(view, location);
   }
 };
+struct unicode_finder {
+  static simdjson_inline size_t find(const std::string_view view,
+                                     size_t location) noexcept {
+    return find_next_json_quotable_character<true>(view, location);
+  }
+};
 
 inline size_t write_string_escaped(const std::string_view input, char *out) {
   return write_string_escaped_with<finder>(input, out);
+}
+
+inline size_t write_string_escaped_unicode(const std::string_view input,
+                                           char *out) {
+  return write_string_escaped_unicode_with<unicode_finder>(input, out);
 }
 } // namespace escape_ppc64
 #endif
@@ -533,6 +691,11 @@ simdjson_inline uint64_t escape_bitmask(escape_vector flags) noexcept {
   return uint64_t(uint32_t(_mm_movemask_epi8(flags)));
 }
 
+simdjson_inline escape_vector escape_unicode_flags(escape_vector v) noexcept {
+  return _mm_or_si128(escape_flags(v),
+                      _mm_cmpeq_epi8(_mm_max_epu8(v, _mm_set1_epi8(127)), v));
+}
+
 #else // SIMDJSON_EXPERIMENTAL_HAS_NEON
 
 using escape_vector = uint8x16_t;
@@ -577,6 +740,10 @@ simdjson_inline bool escape_any(escape_vector flags) noexcept {
 simdjson_inline uint64_t escape_bitmask(escape_vector flags) noexcept {
   uint8x8_t narrowed = vshrn_n_u16(vreinterpretq_u16_u8(flags), 4);
   return vget_lane_u64(vreinterpret_u64_u8(narrowed), 0);
+}
+
+simdjson_inline escape_vector escape_unicode_flags(escape_vector v) noexcept {
+  return vorrq_u8(escape_flags(v), vcgeq_u8(v, vdupq_n_u8(127)));
 }
 
 #endif // instruction set selection
@@ -693,6 +860,27 @@ simdjson_really_inline size_t write_string_escaped(const std::string_view input,
   return size_t(escape_from(src, input.size(), 0, out) - out);
 }
 
+struct unicode_finder {
+  static simdjson_inline size_t find(const std::string_view view,
+                                     size_t location) noexcept {
+    const uint8_t *src = reinterpret_cast<const uint8_t *>(view.data());
+    const size_t len = view.size();
+    while (location + 16 <= len) {
+      const escape_vector flags = escape_unicode_flags(escape_load16(src + location));
+      if (escape_any(flags)) {
+        return location + trailing_zeroes(escape_bitmask(flags)) / escape_mask_bits;
+      }
+      location += 16;
+    }
+    return find_next_json_quotable_character_scalar<true>(view, location);
+  }
+};
+
+inline size_t write_string_escaped_unicode(const std::string_view input,
+                                           char *out) {
+  return write_string_escaped_unicode_with<unicode_finder>(input, out);
+}
+
 #if SIMDJSON_EXPERIMENTAL_HAS_SSE2
 } // namespace escape_sse2
 #else
@@ -736,6 +924,35 @@ simdjson_really_inline size_t write_string_escaped(const std::string_view input,
     i += 32;
   }
   return size_t(escape_from(src, len, i, out) - initout);
+}
+
+struct unicode_finder {
+  static simdjson_inline size_t find(const std::string_view view,
+                                     size_t location) noexcept {
+    const uint8_t *src = reinterpret_cast<const uint8_t *>(view.data());
+    const size_t len = view.size();
+    while (location + 32 <= len) {
+      const __m256i word = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(src + location));
+      const __m256i flags = _mm256_or_si256(
+          _mm256_or_si256(_mm256_cmpeq_epi8(word, _mm256_set1_epi8(34)),
+                          _mm256_cmpeq_epi8(word, _mm256_set1_epi8(92))),
+          _mm256_cmpeq_epi8(_mm256_subs_epu8(word, _mm256_set1_epi8(31)),
+                            _mm256_setzero_si256()));
+      const __m256i high = _mm256_cmpeq_epi8(
+          _mm256_max_epu8(word, _mm256_set1_epi8(127)), word);
+      const uint32_t mask = uint32_t(_mm256_movemask_epi8(_mm256_or_si256(flags, high)));
+      if (mask != 0) {
+        return location + trailing_zeroes(mask);
+      }
+      location += 32;
+    }
+    return escape_sse2::unicode_finder::find(view, location);
+  }
+};
+
+inline size_t write_string_escaped_unicode(const std::string_view input,
+                                           char *out) {
+  return write_string_escaped_unicode_with<unicode_finder>(input, out);
 }
 } // namespace escape_avx2
 #endif

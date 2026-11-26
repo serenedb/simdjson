@@ -441,6 +441,192 @@ bool escape_write_string_escaped_exhaustive() {
   TEST_SUCCEED();
 }
 
+static std::string escape_unicode(std::string_view in) {
+  simdjson::builder::string_builder sb;
+  sb.escape_unicode_and_append(in);
+  std::string_view got;
+  if (sb.view().get(got)) {
+    return "<error>";
+  }
+  return std::string(got);
+}
+
+static std::string escape_unicode_scalar(std::string_view in) {
+  std::string out(6 * in.size(), '\0');
+  out.resize(simdjson::internal::escape_scalar::write_string_escaped_unicode(
+      in, &out[0]));
+  return out;
+}
+
+bool escape_unicode_and_append() {
+  TEST_START();
+  ASSERT_EQUAL(escape_unicode(""), "");
+  ASSERT_EQUAL(escape_unicode("plain ascii ~"), "plain ascii ~");
+  ASSERT_EQUAL(escape_unicode("a\"b\\c\n\x01\x7f"),
+               "a\\\"b\\\\c\\n\\u0001\\u007f");
+  ASSERT_EQUAL(escape_unicode("caf\xc3\xa9"), "caf\\u00e9");
+  ASSERT_EQUAL(escape_unicode("\xd0\xb8\xd0\xbc\xd1\x8f"),
+               "\\u0438\\u043c\\u044f");
+  ASSERT_EQUAL(escape_unicode("\xc2\x80\xdf\xbf"), "\\u0080\\u07ff");
+  ASSERT_EQUAL(escape_unicode("\xe0\xa0\x80\xe2\x82\xac\xef\xbf\xbf"),
+               "\\u0800\\u20ac\\uffff");
+  ASSERT_EQUAL(escape_unicode("\xf0\x90\x80\x80"), "\\ud800\\udc00");
+  ASSERT_EQUAL(escape_unicode("\xf0\x9f\x98\x80"), "\\ud83d\\ude00");
+  ASSERT_EQUAL(escape_unicode("\xf4\x8f\xbf\xbf"), "\\udbff\\udfff");
+  ASSERT_EQUAL(escape_unicode("\x80"), "\\ufffd");
+  ASSERT_EQUAL(escape_unicode("\xc0\xaf"), "\\ufffd\\ufffd");
+  ASSERT_EQUAL(escape_unicode("\xe0\x9f\xbf"), "\\ufffd\\ufffd\\ufffd");
+  ASSERT_EQUAL(escape_unicode("\xed\xa0\x80"), "\\ufffd\\ufffd\\ufffd");
+  ASSERT_EQUAL(escape_unicode("\xf4\x90\x80\x80"),
+               "\\ufffd\\ufffd\\ufffd\\ufffd");
+  ASSERT_EQUAL(escape_unicode("\xf5\xff"), "\\ufffd\\ufffd");
+  ASSERT_EQUAL(escape_unicode("x\xe2\x82"), "x\\ufffd\\ufffd");
+  ASSERT_EQUAL(escape_unicode("\xe2\x82x"), "\\ufffd\\ufffdx");
+  ASSERT_EQUAL(escape_unicode("\xf0\x9f\x98"), "\\ufffd\\ufffd\\ufffd");
+
+  simdjson::builder::string_builder sb;
+  sb.escape_unicode_and_append_with_quotes("\xc3\xa9\"");
+  std::string_view quoted;
+  ASSERT_SUCCESS(sb.view().get(quoted));
+  ASSERT_EQUAL(quoted, "\"\\u00e9\\\"\"");
+  TEST_SUCCEED();
+}
+
+static std::string reference_escape_unicode(std::string_view in) {
+  static const char hex[] = "0123456789abcdef";
+  auto unit = [](std::string &out, uint32_t u) {
+    out += "\\u";
+    for (int shift = 12; shift >= 0; shift -= 4) {
+      out.push_back(hex[(u >> shift) & 0xF]);
+    }
+  };
+  std::string out;
+  size_t i = 0;
+  while (i < in.size()) {
+    const uint8_t c = uint8_t(in[i]);
+    if (c < 0x7F) {
+      out += reference_escape(in.substr(i, 1));
+      i++;
+      continue;
+    }
+    if (c == 0x7F) {
+      unit(out, c);
+      i++;
+      continue;
+    }
+    size_t size = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : 2;
+    uint32_t cp = c & (0x7F >> size);
+    bool valid = c >= 0xC2 && c <= 0xF4 && i + size <= in.size();
+    for (size_t k = 1; valid && k < size; k++) {
+      const uint8_t b = uint8_t(in[i + k]);
+      valid = (b & 0xC0) == 0x80;
+      cp = (cp << 6) | (b & 0x3F);
+    }
+    valid = valid && !(size == 3 && cp < 0x800) &&
+            !(size == 4 && (cp < 0x10000 || cp > 0x10FFFF)) &&
+            !(cp >= 0xD800 && cp <= 0xDFFF);
+    if (!valid) {
+      unit(out, 0xFFFD);
+      i++;
+    } else if (cp > 0xFFFF) {
+      unit(out, 0xD800 + ((cp - 0x10000) >> 10));
+      unit(out, 0xDC00 + ((cp - 0x10000) & 0x3FF));
+      i += size;
+    } else {
+      unit(out, cp);
+      i += size;
+    }
+  }
+  return out;
+}
+
+bool escape_unicode_matches_reference() {
+  TEST_START();
+  const std::string pieces[] = {"a",        "~",
+                                "\x7f",     "\"",
+                                "\\",       "\n",
+                                "\x1f",     "\xc3\xa9",
+                                "\xe2\x82\xac", "\xf0\x9f\x98\x80",
+                                "\x80",     "\xe2\x82",
+                                "\xff"};
+  for (size_t n = 0; n <= 70; n++) {
+    for (const std::string &piece : pieces) {
+      for (size_t pos = 0; pos <= n; pos++) {
+        std::string s(n, 'x');
+        s.insert(pos, piece);
+        const std::string expected = reference_escape_unicode(s);
+        ASSERT_EQUAL(escape_unicode(s), expected);
+        ASSERT_EQUAL(escape_unicode_scalar(s), expected);
+      }
+    }
+  }
+  uint32_t state = 1;
+  auto next = [&state]() -> uint32_t {
+    state = state * 1664525u + 1013904223u;
+    return state;
+  };
+  for (int t = 0; t < 5000; t++) {
+    std::string s;
+    const size_t n = size_t(next() % 80);
+    while (s.size() < n) {
+      const uint32_t r = next();
+      if (r % 3 == 0) {
+        s += pieces[(r >> 8) % (sizeof(pieces) / sizeof(pieces[0]))];
+      } else {
+        s.push_back(char(r >> 24));
+      }
+    }
+    const std::string expected = reference_escape_unicode(s);
+    ASSERT_EQUAL(escape_unicode(s), expected);
+    ASSERT_EQUAL(escape_unicode_scalar(s), expected);
+  }
+  TEST_SUCCEED();
+}
+
+bool escape_unicode_all_code_points() {
+  TEST_START();
+  std::string all;
+  for (char32_t cp = 0; cp <= 0x10FFFF; ++cp) {
+    if (cp >= 0xD800 && cp <= 0xDFFF) {
+      continue;
+    }
+    if (cp < 0x80) {
+      all += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+      all += static_cast<char>(0xC0 | (cp >> 6));
+      all += static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+      all += static_cast<char>(0xE0 | (cp >> 12));
+      all += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+      all += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+      all += static_cast<char>(0xF0 | (cp >> 18));
+      all += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+      all += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+      all += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+  }
+  simdjson::builder::string_builder sb;
+  sb.start_object();
+  sb.escape_and_append_with_quotes("input");
+  sb.append_colon();
+  sb.escape_unicode_and_append_with_quotes(all);
+  sb.end_object();
+  std::string_view json;
+  ASSERT_SUCCESS(sb.view().get(json));
+  for (char c : json) {
+    ASSERT_TRUE(uint8_t(c) >= 0x20 && uint8_t(c) < 0x7F);
+  }
+  simdjson::padded_string padded = json;
+  simdjson::ondemand::parser parser;
+  simdjson::ondemand::document doc;
+  ASSERT_SUCCESS(parser.iterate(padded).get(doc));
+  std::string_view recovered;
+  ASSERT_SUCCESS(doc["input"].get(recovered));
+  ASSERT_EQUAL(recovered, all);
+  TEST_SUCCEED();
+}
+
 bool various_integers() {
   TEST_START();
   std::vector<std::pair<int64_t, std::string_view>> test_cases = {
@@ -1061,7 +1247,9 @@ bool run() {
          nan_inf_in_array() && nan_inf_in_object() && nan_inf_roundtrip() &&
 #endif
          clear() && escape_and_append() && escape_and_append_with_quotes() &&
-         escape_write_string_escaped_exhaustive() && move_to_string() &&
+         escape_write_string_escaped_exhaustive() && escape_unicode_and_append() &&
+         escape_unicode_matches_reference() && escape_unicode_all_code_points() &&
+         move_to_string() &&
          move_to_small_result_does_not_keep_buffer() &&
          move_to_large_result_is_not_copied() &&
          move_to_small_result_keeps_builder_buffer() && append_raw() &&
